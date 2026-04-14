@@ -1,0 +1,11 @@
+streamlit
+yfinance
+pandas
+numpy
+plotly
+ta
+twstock
+lxml
+requests
+urllib3
+
