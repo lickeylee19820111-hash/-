@@ -11,22 +11,23 @@ session = requests.Session()
 session.verify = False 
 
 @st.cache_data(ttl=1800)
-def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
+def screen_stocks(tickers: list[str], show_progress=False, min_volume: int = 1000, kd_mode: str = "嚴格金叉 (當週交叉)") -> pd.DataFrame:
     """
     Scans a list of stocks for:
     1. Weekly KD Golden Cross
     2. Weekly Volume Increasing
     3. Institutional Accumulation (OBV proxy)
-    4. Daily Volume > 1000 lots (1,000,000 shares)
+    4. Daily Volume > min_volume lots
     
-    Optimized for Streamlit Cloud using Bulk Download to bypass Rate Limits.
+    Optimized for Streamlit Cloud using Bulk Download.
     """
     results = []
     if not tickers:
         return pd.DataFrame()
 
     total = len(tickers)
-    batch_size = 50 # Process 50 tickers at a time to stay within limits and speed up
+    batch_size = 50 
+    min_vol_shares = min_volume * 1000
     
     progress_bar = None
     status_text = None
@@ -65,9 +66,9 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
                     if df_daily.empty or len(df_daily) < 30:
                         continue
                         
-                    # 1. LIQUIDITY CHECK: Daily Volume > 1000 lots (1,000,000 shares)
+                    # 1. LIQUIDITY CHECK: Daily Volume > min_volume
                     last_vol_daily = df_daily['Volume'].iloc[-1]
-                    if last_vol_daily < 1000000:
+                    if last_vol_daily < min_vol_shares:
                         continue
 
                     # 2. WEEKLY RESAMPLING (In-Memory, no extra network)
@@ -102,11 +103,15 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
                     obv_now, obv_prev_2 = df_wk['OBV'].iloc[-1], df_wk['OBV'].iloc[-3]
                     
                     # Conditions
-                    kd_cross = (k_now > d_now) and (k_prev <= d_prev)
+                    if kd_mode == "嚴格金叉 (當週交叉)":
+                        kd_condition = (k_now > d_now) and (k_prev <= d_prev)
+                    else: # 多頭排列 (K > D 即可)
+                        kd_condition = (k_now > d_now)
+                        
                     vol_up = vol_wk_now > vol_wk_prev
                     acc_up = obv_now > obv_prev_2
                     
-                    if kd_cross and vol_up and acc_up:
+                    if kd_condition and vol_up and acc_up:
                         core_code = ticker_sym.split(".")[0]
                         results.append({
                             "股票代號": core_code,
