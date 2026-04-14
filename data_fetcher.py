@@ -102,7 +102,6 @@ def fetch_stock_info(symbol_code):
 def fetch_fundamental_data(symbol):
     """ 
     Fetch fundamental data using a hybrid of yfinance and TWSE/TPEx Open APIs.
-    Prioritizes official TWSE/TPEx data for ratios.
     """
     code = symbol.split('.')[0]
     data = {
@@ -112,60 +111,67 @@ def fetch_fundamental_data(symbol):
         'Dividend Yield': 'N/A'
     }
     
-    # 1. Try yfinance for basics (Market Cap and EPS)
+    # 1. Market Cap & EPS (yfinance focused)
     try:
         ticker = yf.Ticker(symbol)
         
-        # Use fast_info for market cap - much more reliable for TW stocks
+        # A. Market Cap Retrieval (Multi-path)
         mcap = None
-        try:
-            mcap = ticker.fast_info.get('market_cap')
-        except:
-            pass
-            
-        if not mcap or pd.isna(mcap):
-            info = ticker.info
-            mcap = info.get('marketCap')
-            if not mcap or mcap == 'N/A':
-                shares = info.get('sharesOutstanding')
-                if shares and 'currentPrice' in info:
-                    mcap = shares * info['currentPrice']
+        # Path 1: fast_info
+        try: mcap = ticker.fast_info.get('market_cap')
+        except: pass
         
+        # Path 2: info direct
+        info = {}
+        try: info = ticker.info
+        except: pass
+        
+        if (not mcap or pd.isna(mcap)) and info:
+            mcap = info.get('marketCap')
+            
+        # Path 3: Calculation (Price * Shares)
+        if (not mcap or pd.isna(mcap) or mcap == 'N/A') and info:
+            shares = info.get('sharesOutstanding') or info.get('shares_outstanding')
+            price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
+            if shares and price:
+                mcap = shares * price
+        
+        # Format Market Cap
         if mcap and not pd.isna(mcap) and mcap != 'N/A':
             if mcap >= 1e12:
                 data['Market Cap'] = f"{mcap / 1e12:.2f} 兆"
             else:
                 data['Market Cap'] = f"{mcap / 1e8:.1f} 億"
         
-        # Other fundamentals from standard info
-        info = ticker.info
+        # B. EPS & Other standard fields
         if info:
             data['EPS (Trailing)'] = info.get('trailingEps', 'N/A')
             data['Trailing P/E'] = info.get('trailingPE', 'N/A')
             dy = info.get('dividendYield')
             if isinstance(dy, (int, float)):
                 data['Dividend Yield'] = f"{dy*100:.2f}%" if dy < 1 else f"{dy:.2f}%"
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"YFinance Fetch Warning for {symbol}: {e}")
 
-    # 2. Prefer TWSE (Listed) for ratios
+    # 2. Enrich with TWSE/TPEx (Listed/OTC ratios)
+    # This step should ONLY update PE/Yield/EPS if missing, never overwrite Market Cap
     try:
-        url_cat = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-        res_cat = requests.get(url_cat, verify=False, timeout=5)
-        if res_cat.status_code == 200:
-            json_data = res_cat.json()
-            if isinstance(json_data, list):
-                df_cat = pd.DataFrame(json_data)
-                matches = df_cat[df_cat['Code'] == code]
-                if not matches.empty:
-                    row = matches.iloc[0]
+        # (Listed)
+        url_twse = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+        res = requests.get(url_twse, verify=False, timeout=5)
+        if res.status_code == 200:
+            df_twse = pd.DataFrame(res.json())
+            match = df_twse[df_twse['Code'] == code]
+            if not match.empty:
+                row = match.iloc[0]
+                # Update if yfinance failed
+                if data['Trailing P/E'] == 'N/A' or data['Trailing P/E'] == 0:
                     pe = row.get('PEratio')
-                    if pe and pe != '0.00' and pe != 'N/A':
-                        data['Trailing P/E'] = pe
-                    dy = row.get('DividendYield')
-                    if dy and dy != 'N/A':
-                        data['Dividend Yield'] = f"{dy}%"
-                    return data # Found authoritative data for listed stock
+                    if pe and pe != '0.00': data['Trailing P/E'] = pe
+                if data['Dividend Yield'] == 'N/A':
+                    dy = row.get('YieldRatio')
+                    if dy: data['Dividend Yield'] = f"{dy}%"
+                return data
     except Exception:
         pass
 
