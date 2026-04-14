@@ -99,6 +99,7 @@ def fetch_stock_data(symbol, period="1y", interval="1d"):
 def fetch_stock_info(symbol_code):
     return get_stock_info_from_api(symbol_code)
 
+@st.cache_data(ttl=600)
 def fetch_fundamental_data(symbol):
     """ 
     Fetch fundamental data using a hybrid of yfinance and TWSE/TPEx Open APIs.
@@ -127,11 +128,9 @@ def fetch_fundamental_data(symbol):
         
         # A. Market Cap Retrieval (Multi-path)
         mcap = None
-        # Path 1: fast_info
         try: mcap = ticker.fast_info.get('market_cap')
         except: pass
         
-        # Path 2: info direct
         info = {}
         try: info = ticker.info
         except: pass
@@ -139,29 +138,29 @@ def fetch_fundamental_data(symbol):
         if (not mcap or pd.isna(mcap)) and info:
             mcap = info.get('marketCap')
             
-        # Path 3: Calculation (Price * Shares)
         if (not mcap or pd.isna(mcap) or mcap == 'N/A') and info:
             shares = info.get('sharesOutstanding') or info.get('shares_outstanding')
             price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
-            if shares and price:
-                mcap = shares * price
+            if shares and price: mcap = shares * price
         
         # Format Market Cap
         if mcap and not pd.isna(mcap) and mcap != 'N/A':
-            if mcap >= 1e12:
-                data['Market Cap'] = f"{mcap / 1e12:.2f} 兆"
-            else:
-                data['Market Cap'] = f"{mcap / 1e8:.1f} 億"
+            if mcap >= 1e12: data['Market Cap'] = f"{mcap / 1e12:.2f} 兆"
+            else: data['Market Cap'] = f"{mcap / 1e8:.1f} 億"
         
-        # B. EPS & Other standard fields
+        # B. EPS & PE Rounding
         if info:
-            data['EPS (Trailing)'] = info.get('trailingEps', 'N/A')
-            data['Trailing P/E'] = info.get('trailingPE', 'N/A')
+            deps = info.get('trailingEps')
+            if deps and not pd.isna(deps): data['EPS (Trailing)'] = round(deps, 2)
+            
+            pe = info.get('trailingPE')
+            if isinstance(pe, (int, float)): data['Trailing P/E'] = round(pe, 2)
+            
             dy = info.get('dividendYield')
             if isinstance(dy, (int, float)):
                 data['Dividend Yield'] = f"{dy*100:.2f}%" if dy < 1 else f"{dy:.2f}%"
-    except Exception as e:
-        print(f"YFinance Fetch Warning for {symbol}: {e}")
+    except Exception:
+        pass
 
     # 2. Enrich with TWSE/TPEx (Listed/OTC ratios)
     # This step should ONLY update PE/Yield/EPS if missing, never overwrite Market Cap
