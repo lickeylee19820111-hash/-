@@ -16,6 +16,8 @@ def get_stock_data(symbol, period="1y", interval="1d"):
     def _do_fetch(sym):
         try:
             df = yf.download(sym, period=period, interval=interval, progress=False, timeout=20)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             if df.empty:
                 ticker = yf.Ticker(sym)
                 df = ticker.history(period=period, interval=interval)
@@ -113,11 +115,32 @@ def fetch_fundamental_data(symbol):
     # 1. Try yfinance for basics (Market Cap and EPS)
     try:
         ticker = yf.Ticker(symbol)
+        
+        # Use fast_info for market cap - much more reliable for TW stocks
+        mcap = None
+        try:
+            mcap = ticker.fast_info.get('market_cap')
+        except:
+            pass
+            
+        if not mcap or pd.isna(mcap):
+            info = ticker.info
+            mcap = info.get('marketCap')
+            if not mcap or mcap == 'N/A':
+                shares = info.get('sharesOutstanding')
+                if shares and 'currentPrice' in info:
+                    mcap = shares * info['currentPrice']
+        
+        if mcap and not pd.isna(mcap) and mcap != 'N/A':
+            if mcap >= 1e12:
+                data['Market Cap'] = f"{mcap / 1e12:.2f} 兆"
+            else:
+                data['Market Cap'] = f"{mcap / 1e8:.1f} 億"
+        
+        # Other fundamentals from standard info
         info = ticker.info
         if info:
-            data['Market Cap'] = info.get('marketCap', 'N/A')
             data['EPS (Trailing)'] = info.get('trailingEps', 'N/A')
-            # Fallback ratios if others fail
             data['Trailing P/E'] = info.get('trailingPE', 'N/A')
             dy = info.get('dividendYield')
             if isinstance(dy, (int, float)):

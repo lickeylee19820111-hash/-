@@ -52,19 +52,14 @@ if st.session_state.get('mode', 'home') == 'screener':
     st.header("🔎 全台股大數據掃描 (獨家篩選器)")
     st.write("這是一個自動化掃描儀器，自動為您掃描 **全台灣上市/上櫃股票**，篩選同時符合：**週ＫＤ黃金交叉** ➕ **週成交量增溫** ➕ **資金流向轉正** 的飆股潛力股。")
     
-    st.info("💡 提醒：掃描全台股約需 1-2 分鐘，請耐心等候掃描完成。結果會自動緩存 30 分鐘。")
+    st.info("💡 提醒：掃描全台股約需 1-2 分鐘，請耐心等候掃描完成。結果會自動緩存 10 分鐘。")
     
-    with st.expander("🛠️ 調整篩選強度", expanded=True):
-        min_vol = st.slider("最低成交量 (張)", min_value=100, max_value=3000, value=800, step=100)
-        kd_mode = st.radio("KD 篩選模式", ["嚴格金叉 (當週交叉)", "多頭排列 (K > D 即可)"], index=0)
-
     if st.button("🚀 開始掃描全台股個股"):
         all_tickers = get_all_taiwan_tickers()
-        # Add a placeholder for liquidity filtering
-        st.write(f"正在從 {len(all_tickers)} 檔股票中，篩選成交量大於 {min_vol} 張且符合起漲條件的個股...")
+        st.write(f"正在從 {len(all_tickers)} 檔股票中，篩選近期『轉強』的潛力股...")
         
-        # Pass user settings to the backend
-        res = screen_stocks(all_tickers, show_progress=True, min_volume=min_vol, kd_mode=kd_mode)
+        # 使用還原後的簡潔版本
+        res = screen_stocks(all_tickers, show_progress=True)
         st.session_state['scan_res_df'] = res
         st.session_state['scan_count'] = len(all_tickers)
         st.session_state['nav_list'] = res['股票代號'].astype(str).tolist() if not res.empty else []
@@ -237,8 +232,8 @@ elif st.session_state.get('mode', 'home') == 'home':
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             
             # Safe string formatting for possible N/A
-            mcap_val = fundamentals.get('Market Cap', 0)
-            mcap_str = f"${mcap_val / 1e8:.2f} 億" if isinstance(mcap_val, (int, float)) else "N/A"
+            # Safe string formatting for possible N/A
+            mcap_str = str(fundamentals.get('Market Cap', 'N/A'))
                 
             f_col1.metric("市值", mcap_str)
             f_col2.metric("本益比 (PE)", f"{fundamentals.get('Trailing P/E', 'N/A')}")
