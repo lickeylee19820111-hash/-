@@ -104,63 +104,54 @@ def fetch_fundamental_data(symbol):
     """ 
     Fetch fundamental data using a hybrid of yfinance and TWSE/TPEx Open APIs.
     """
-    # 0. 關鍵修正：確保 symbol 帶有正確的台股後綴 (.TW 或 .TWO)
     if "." not in str(symbol):
         resolved = resolve_taiwan_stock(symbol)
-        if isinstance(resolved, tuple):
-            symbol = resolved[0]
-        else:
-            symbol = resolved
+        symbol = resolved[0] if isinstance(resolved, tuple) else resolved
             
-    # Ensure symbol is a string for split
     symbol = str(symbol)
     code = symbol.split('.')[0]
-    data = {
-        'Market Cap': 'N/A',
-        'Trailing P/E': 'N/A',
-        'EPS (Trailing)': 'N/A',
-        'Dividend Yield': 'N/A'
-    }
+    data = {'Market Cap': 'N/A', 'Trailing P/E': 'N/A', 'EPS (Trailing)': 'N/A', 'Dividend Yield': 'N/A'}
     
-    # 1. Market Cap & EPS (yfinance focused)
     try:
         ticker = yf.Ticker(symbol)
         
-        # A. Market Cap Retrieval (Multi-path)
+        # 1. 市值抓取 (優先使用最輕量化接口)
         mcap = None
-        try: mcap = ticker.fast_info.get('market_cap')
+        try:
+            mcap = ticker.fast_info.get('market_cap')
+            if mcap and mcap > 0:
+                print(f"✅ {symbol} FastInfo Market Cap: {mcap}")
         except: pass
         
-        info = {}
-        try: info = ticker.info
-        except: pass
+        # 備援路徑 A: 計算法 (及時股價 * 總股數)
+        if not mcap or pd.isna(mcap):
+            try:
+                shares = ticker.fast_info.get('shares_outstanding')
+                # 抓取最後一個收盤價
+                hist = ticker.history(period="1d")
+                if not hist.empty and shares:
+                    mcap = shares * hist['Close'].iloc[-1]
+                    print(f"✅ {symbol} Calculated Market Cap: {mcap}")
+            except: pass
+
+        # 備援路徑 B: 傳統 Info
+        if not mcap or pd.isna(mcap):
+            try:
+                info = ticker.info
+                mcap = info.get('marketCap')
+                data['EPS (Trailing)'] = info.get('trailingEps', 'N/A')
+                data['Trailing P/E'] = round(info.get('trailingPE', 2)) if isinstance(info.get('trailingPE'), (int, float)) else 'N/A'
+                dy = info.get('dividendYield')
+                if isinstance(dy, (int, float)): data['Dividend Yield'] = f"{dy*100:.2f}%"
+            except: pass
         
-        if (not mcap or pd.isna(mcap)) and info:
-            mcap = info.get('marketCap')
-            
-        if (not mcap or pd.isna(mcap) or mcap == 'N/A') and info:
-            shares = info.get('sharesOutstanding') or info.get('shares_outstanding')
-            price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
-            if shares and price: mcap = shares * price
-        
-        # Format Market Cap
-        if mcap and not pd.isna(mcap) and mcap != 'N/A':
+        # 最終顯示處理
+        if mcap and not pd.isna(mcap) and mcap > 0:
             if mcap >= 1e12: data['Market Cap'] = f"{mcap / 1e12:.2f} 兆"
             else: data['Market Cap'] = f"{mcap / 1e8:.1f} 億"
-        
-        # B. EPS & PE Rounding
-        if info:
-            deps = info.get('trailingEps')
-            if deps and not pd.isna(deps): data['EPS (Trailing)'] = round(deps, 2)
             
-            pe = info.get('trailingPE')
-            if isinstance(pe, (int, float)): data['Trailing P/E'] = round(pe, 2)
-            
-            dy = info.get('dividendYield')
-            if isinstance(dy, (int, float)):
-                data['Dividend Yield'] = f"{dy*100:.2f}%" if dy < 1 else f"{dy:.2f}%"
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ {symbol} 抓取異常: {e}")
 
     # 2. Enrich with TWSE/TPEx (Listed/OTC ratios)
     # This step should ONLY update PE/Yield/EPS if missing, never overwrite Market Cap
