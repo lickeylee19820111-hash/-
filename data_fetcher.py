@@ -104,9 +104,15 @@ def fetch_fundamental_data(symbol):
     Fetch fundamental data using a hybrid of yfinance and TWSE/TPEx Open APIs.
     """
     # 0. 關鍵修正：確保 symbol 帶有正確的台股後綴 (.TW 或 .TWO)
-    if "." not in symbol:
-        symbol = resolve_taiwan_stock(symbol)
-        
+    if "." not in str(symbol):
+        resolved = resolve_taiwan_stock(symbol)
+        if isinstance(resolved, tuple):
+            symbol = resolved[0]
+        else:
+            symbol = resolved
+            
+    # Ensure symbol is a string for split
+    symbol = str(symbol)
     code = symbol.split('.')[0]
     data = {
         'Market Cap': 'N/A',
