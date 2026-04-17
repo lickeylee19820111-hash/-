@@ -54,12 +54,18 @@ if st.session_state.get('mode', 'home') == 'screener':
     
     st.info("💡 提醒：掃描全台股約需 1-2 分鐘，請耐心等候掃描完成。結果會自動緩存 10 分鐘。")
     
+    # [新增] 選股模式選擇器
+    scan_mode = st.radio("🎯 選擇選股模式", ["KD轉強", "均線糾結"], horizontal=True, help="KD轉強：適合追蹤起漲動能；均線糾結：適合佈局長時間打底後即將突破的股票。")
+    
+    if scan_mode == "均線糾結":
+        st.write("📋 **我的選股條件：** 日成交量 > 1000張 + 長時間橫盤整理 + 均線(5,10,20,60)糾結。")
+    
     if st.button("🚀 開始掃描全台股個股"):
         all_tickers = get_all_taiwan_tickers()
-        st.write(f"正在從 {len(all_tickers)} 檔股票中，篩選近期『轉強』的潛力股...")
+        st.write(f"正在執行『{scan_mode}』選股，掃描全市場 {len(all_tickers)} 檔股票...")
         
-        # 使用還原後的簡潔版本
-        res = screen_stocks(all_tickers, show_progress=True)
+        # 使用傳入模式的參數
+        res = screen_stocks(all_tickers, show_progress=True, mode=scan_mode)
         st.session_state['scan_res_df'] = res
         st.session_state['scan_count'] = len(all_tickers)
         st.session_state['nav_list'] = res['股票代號'].astype(str).tolist() if not res.empty else []
