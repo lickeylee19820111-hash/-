@@ -75,30 +75,31 @@ def screen_stocks(tickers: list[str], show_progress=False, mode="KD轉強") -> p
 
                 elif mode == "均線糾結":
                     # --- [模式2] 均線糾結邏輯 ---
-                    # 計算 5, 10, 20, 60 MA
+                    # 1. 取得週資料計算前週均量
+                    df_wk = df_daily.resample('W').agg({'Volume': 'sum'}).dropna()
+                    if len(df_wk) < 5: continue
+                    avg_vol_prev_wk = df_wk['Volume'].iloc[-2] / 5.0 # 前週日均量
+                    
+                    # 2. 計算 5, 10, 20, 60 MA
                     df_daily['MA5'] = df_daily['Close'].rolling(5).mean()
                     df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
                     df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
                     df_daily['MA60'] = df_daily['Close'].rolling(60).mean()
                     
-                    # 取最新一天的 MA 值
                     ma_vals = [df_daily['MA5'].iloc[-1], df_daily['MA10'].iloc[-1], df_daily['MA20'].iloc[-1], df_daily['MA60'].iloc[-1]]
                     if any(pd.isna(ma_vals)): continue
                     
-                    # 判斷糾結度 (最高均線與最低均線價差在 3% 以內)
+                    # 3. 判斷糾結度 (< 3%) 與 橫盤 (幅 < 15%)
                     diff = (max(ma_vals) - min(ma_vals)) / min(ma_vals)
-                    is_converged = diff < 0.03 
-                    
-                    # 判斷橫盤整理 (最近 40 天股價高低震幅 < 15%)
                     price_recent = df_daily['Close'].tail(40)
                     amplitude = (price_recent.max() - price_recent.min()) / price_recent.min()
-                    is_sideways = amplitude < 0.15
                     
-                    # 即將往上 (收盤價站上所有均線，且當天不跌)
-                    is_breaking_up = df_daily['Close'].iloc[-1] >= max(ma_vals) and df_daily['Close'].iloc[-1] >= df_daily['Close'].iloc[-2]
+                    # 4. 突破訊號：站上均線 + 當日量 > 前週均量 2 倍
+                    is_vol_spike = last_vol > (avg_vol_prev_wk * 2)
+                    is_breaking_up = df_daily['Close'].iloc[-1] >= max(ma_vals) and is_vol_spike
                     
-                    if is_converged and is_sideways and is_breaking_up:
-                        pass # 符合條件
+                    if diff < 0.03 and amplitude < 0.15 and is_breaking_up:
+                        pass
                     else: continue
 
                 # 通過篩選，加入結果清單
