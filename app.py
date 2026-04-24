@@ -50,22 +50,18 @@ formatted_ticker, chinese_name = resolve_taiwan_stock(st.session_state['active_t
 
 if st.session_state.get('mode', 'home') == 'screener':
     st.header("🔎 全台股大數據掃描 (獨家篩選器)")
-    st.write("這是一個自動化掃描儀器，自動為您掃描 **全台灣上市/上櫃股票**，篩選同時符合：**週ＫＤ黃金交叉** ➕ **週成交量增溫** ➕ **資金流向轉正** 的飆股潛力股。")
+    st.write("這是一個自動化掃描儀器，自動為您掃描 **全台灣上市/上櫃股票**。")
     
     st.info("💡 提醒：掃描全台股約需 1-2 分鐘，請耐心等候掃描完成。結果會自動緩存 10 分鐘。")
     
-    # [新增] 選股模式選擇器
-    scan_mode = st.radio("🎯 選擇選股模式", ["KD轉強", "均線糾結"], horizontal=True, help="KD轉強：適合追蹤起漲動能；均線糾結：適合佈局長時間打底後即將突破的股票。")
+    st.info("💡 提醒：點擊下方按鈕將一次掃描『技術面、籌碼面、基本面』所有條件。掃描全台股約需 1-2 分鐘，請耐心等候。")
     
-    if scan_mode == "均線糾結":
-        st.write("📋 **我的選股條件：** 日成交量 > 1000張 + 長時間橫盤整理 + 均線(5,10,20,60)糾結。")
-    
-    if st.button("🚀 開始掃描全台股個股"):
+    if st.button("🚀 開始全市場大數據掃描 (上市+上櫃)", use_container_width=True):
         all_tickers = get_all_taiwan_tickers()
-        st.write(f"正在執行『{scan_mode}』選股，掃描全市場 {len(all_tickers)} 檔股票...")
+        st.write(f"正在掃描全市場 {len(all_tickers)} 檔股票，計算多重指標中...")
         
-        # 使用傳入模式的參數
-        res = screen_stocks(all_tickers, show_progress=True, mode=scan_mode)
+        # 執行全能掃描
+        res = screen_stocks(all_tickers, show_progress=True)
         st.session_state['scan_res_df'] = res
         st.session_state['scan_count'] = len(all_tickers)
         st.session_state['nav_list'] = res['股票代號'].astype(str).tolist() if not res.empty else []
@@ -73,23 +69,62 @@ if st.session_state.get('mode', 'home') == 'screener':
     if 'scan_res_df' in st.session_state:
         res_df = st.session_state['scan_res_df']
         scan_count = st.session_state.get('scan_count', 0)
+        
         if not res_df.empty:
-            st.success(f"太棒了！在 {scan_count} 檔股票中，發現了 {len(res_df)} 檔近期符合所有『起漲吃貨條件』的潛力股 🎉")
-            st.dataframe(res_df, width="stretch")
+            # 分類結果
+            # 1. 重複兩次出現即可 (符合數 >= 2)
+            dual_match = res_df[res_df['符合數'] >= 2].sort_values(by='符合數', ascending=False)
+            # 2. 個別條件
+            kd_res = res_df[res_df['KD'] == True]
+            ma_res = res_df[res_df['MA'] == True]
+            fund_res = res_df[res_df['FUND'] == True]
+
+            st.success(f"掃描完成！在 {scan_count} 檔中發現了多個潛力標的。")
             
-            st.markdown("### 🎯 點擊按鈕一鍵進行個股分析")
-            cols = st.columns(4)
-            for i, row in res_df.iterrows():
-                col = cols[i % 4]
-                code = row['股票代號']
-                if col.button(f"📊 分析 {code}", key=f"analyze_{code}"):
-                    st.session_state['active_ticker'] = str(code)
-                    st.session_state['input_key_suffix'] += 1
-                    st.session_state['mode'] = 'home'
-                    st.session_state['auto_analyze'] = True
-                    st.rerun()
+            # 使用分頁顯示
+            t1, t2, t3, t4 = st.tabs([
+                f"🏆 強勢組合 ({len(dual_match)})", 
+                f"📈 KD轉強 ({len(kd_res)})", 
+                f"🧘 均線糾結 ({len(ma_res)})", 
+                f"💰 價值成長 ({len(fund_res)})"
+            ])
+            
+            def render_analysis_buttons(df_target, prefix):
+                if df_target.empty:
+                    st.write("此分類目前無符合股票。")
+                    return
+                st.markdown("---")
+                st.markdown(f"### 🎯 點擊按鈕進行個股分析 ({prefix})")
+                cols = st.columns(4)
+                for i, (idx, row) in enumerate(df_target.iterrows()):
+                    if i >= 12: break # 每頁最多顯示 12 個按鈕以免太亂
+                    col = cols[i % 4]
+                    code = row['股票代號']
+                    if col.button(f"📊 分析 {code}", key=f"analyze_{prefix}_{code}"):
+                        st.session_state['active_ticker'] = str(code)
+                        st.session_state['input_key_suffix'] += 1
+                        st.session_state['mode'] = 'home'
+                        st.session_state['auto_analyze'] = True
+                        st.rerun()
+
+            with t1:
+                st.write("🎯 **強勢組合**：同時符合 **2 個或以上** 篩選條件的優質標的。")
+                st.dataframe(dual_match, width="stretch")
+                render_analysis_buttons(dual_match, "combo")
+            with t2:
+                st.write("📈 **KD 轉強**：日K黃金交叉，起漲動能強。")
+                st.dataframe(kd_res, width="stretch")
+                render_analysis_buttons(kd_res, "kd")
+            with t3:
+                st.write("🧘 **均線糾結**：均線高度靠攏後突破，適合波段佈局。")
+                st.dataframe(ma_res, width="stretch")
+                render_analysis_buttons(ma_res, "ma")
+            with t4:
+                st.write("💰 **價值成長**：低本益比 + 低融資率，下檔有撐且籌碼乾淨。")
+                st.dataframe(fund_res, width="stretch")
+                render_analysis_buttons(fund_res, "fund")
         else:
-            st.warning("目前這份觀察清單中，這週尚未有股票同時滿足所有條件哦。可以嘗試加入更多標的！")
+            st.warning("目前市場上尚未發現符合條件的股票。")
 
 elif st.session_state.get('mode', 'home') == 'home':
     if st.session_state.get('show_market', False):

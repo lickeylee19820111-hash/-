@@ -6,18 +6,20 @@ import twstock
 import time
 import requests
 
-@st.cache_data(ttl=600) 
-def screen_stocks(tickers: list[str], show_progress=False, mode="KD轉強") -> pd.DataFrame:
+@st.cache_data(ttl=600)
+def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
     """
-    雙模式選股器：
-    1. KD轉強 (昨日設定)
-    2. 均線糾結 (我的選股)
+    全能選股器：一次掃描計算所有條件 (KD, MA, 基本面)
     """
     results = []
     if not tickers: return pd.DataFrame()
 
+    # 1. 預先抓取全局基本面與融資數據
+    margin_data = fetch_all_margin_data()
+    pe_data = fetch_all_pe_data()
+
     total = len(tickers)
-    batch_size = 20
+    batch_size = 30
     
     progress_bar = st.progress(0.0) if show_progress else None
     status_text = st.empty() if show_progress else None
@@ -26,9 +28,12 @@ def screen_stocks(tickers: list[str], show_progress=False, mode="KD轉強") -> p
         batch = tickers[i : i + batch_size]
         if show_progress:
             progress_bar.progress((i + len(batch)) / total)
-            status_text.text(f"🚀 {mode} 掃描中: {i+1} ~ {i+len(batch)} / {total}")
+            status_text.text(f"🔍 全方位大數據掃描中: {i+1} ~ {i+len(batch)} / {total}")
             
-        data = yf.download(batch, period="1y", interval="1d", group_by='ticker', threads=True, progress=False, timeout=30)
+        try:
+            data = yf.download(batch, period="1y", interval="1d", group_by='ticker', threads=True, progress=False, timeout=30)
+        except: continue
+        
         if data.empty: continue
 
         for ticker_sym in batch:
@@ -44,80 +49,114 @@ def screen_stocks(tickers: list[str], show_progress=False, mode="KD轉強") -> p
                     df_daily.columns = df_daily.columns.get_level_values(0)
                 df_daily = df_daily.dropna(subset=['Close'])
                 
-                # FALLBACK
-                if df_daily.empty:
-                    alt_suffix = ".TWO" if ".TW" in ticker_sym else ".TW"
-                    alt_ticker = ticker_sym.split(".")[0] + alt_suffix
-                    df_daily = yf.download(alt_ticker, period="1y", interval="1d", progress=False, timeout=10)
-                    if isinstance(df_daily.columns, pd.MultiIndex): df_daily.columns = df_daily.columns.get_level_values(0)
-                    if not df_daily.empty: df_daily = df_daily.dropna(subset=['Close'])
-
                 if df_daily.empty or len(df_daily) < 65: continue
                         
-                # 共通條件：日量 > 1000張
+                # 共通基礎條件：成交量 > 1000張
                 last_vol = df_daily['Volume'].iloc[-1]
                 if last_vol < 1000000: continue
+                
+                core_code = ticker_sym.split(".")[0]
+                match_kd = False
+                match_ma = False
+                match_fund = False
 
-                if mode == "KD轉強":
-                    # --- [模式1] 週KD交叉相關邏輯 ---
-                    df_wk = df_daily.resample('W').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
-                    if len(df_wk) < 10: continue
-                    stoch = ta.momentum.StochasticOscillator(high=df_wk['High'], low=df_wk['Low'], close=df_wk['Close'], window=9, smooth_window=3)
-                    df_wk['K'], df_wk['D'] = stoch.stoch(), stoch.stoch_signal()
-                    df_wk['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=df_wk['Close'], volume=df_wk['Volume']).on_balance_volume()
-                    k_now, d_now, k_prev, d_prev = df_wk['K'].iloc[-1], df_wk['D'].iloc[-1], df_wk['K'].iloc[-2], df_wk['D'].iloc[-2]
-                    vol_wk_last, vol_wk_prev = df_wk['Volume'].iloc[-2], df_wk['Volume'].iloc[-3]
-                    obv_last, obv_prev = df_wk['OBV'].iloc[-2], df_wk['OBV'].iloc[-3]
-                    
-                    if (k_now > d_now and k_prev <= d_prev) and (vol_wk_last > vol_wk_prev) and (obv_last > obv_prev):
-                        pass # 符合條件，後續統一加入
-                    else: continue
-
-                elif mode == "均線糾結":
-                    # --- [模式2] 均線糾結邏輯 ---
-                    # 1. 取得週資料計算前週均量
-                    df_wk = df_daily.resample('W').agg({'Volume': 'sum'}).dropna()
-                    if len(df_wk) < 5: continue
-                    avg_vol_prev_wk = df_wk['Volume'].iloc[-2] / 5.0 # 前週日均量
-                    
-                    # 2. 計算 5, 10, 20, 60 MA
-                    df_daily['MA5'] = df_daily['Close'].rolling(5).mean()
-                    df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
-                    df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
-                    df_daily['MA60'] = df_daily['Close'].rolling(60).mean()
-                    
-                    ma_vals = [df_daily['MA5'].iloc[-1], df_daily['MA10'].iloc[-1], df_daily['MA20'].iloc[-1], df_daily['MA60'].iloc[-1]]
-                    if any(pd.isna(ma_vals)): continue
-                    
-                    # 3. 判斷糾結度 (< 3%) 與 橫盤 (幅 < 15%)
+                # --- [1] KD 轉強 ---
+                stoch = ta.momentum.StochasticOscillator(high=df_daily['High'], low=df_daily['Low'], close=df_daily['Close'], window=9, smooth_window=3)
+                df_daily['K'], df_daily['D'] = stoch.stoch(), stoch.stoch_signal()
+                k_now, d_now, k_prev, d_prev = df_daily['K'].iloc[-1], df_daily['D'].iloc[-1], df_daily['K'].iloc[-2], df_daily['D'].iloc[-2]
+                if (k_now > d_now and k_prev <= d_prev) and k_now < 85:
+                    match_kd = True
+                
+                # --- [2] 均線糾結 ---
+                df_daily['MA5'] = df_daily['Close'].rolling(5).mean()
+                df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
+                df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
+                df_daily['MA60'] = df_daily['Close'].rolling(60).mean()
+                ma_vals = [df_daily['MA5'].iloc[-1], df_daily['MA10'].iloc[-1], df_daily['MA20'].iloc[-1], df_daily['MA60'].iloc[-1]]
+                if not any(pd.isna(ma_vals)):
                     diff = (max(ma_vals) - min(ma_vals)) / min(ma_vals)
                     price_recent = df_daily['Close'].tail(40)
                     amplitude = (price_recent.max() - price_recent.min()) / price_recent.min()
-                    
-                    # 4. 突破訊號：站上均線 + 當日量 > 前週均量 2 倍
-                    is_vol_spike = last_vol > (avg_vol_prev_wk * 2)
-                    is_breaking_up = df_daily['Close'].iloc[-1] >= max(ma_vals) and is_vol_spike
-                    
-                    if diff < 0.03 and amplitude < 0.15 and is_breaking_up:
-                        pass
-                    else: continue
+                    is_breaking_up = df_daily['Close'].iloc[-1] >= max(ma_vals)
+                    if diff < 0.05 and amplitude < 0.22 and is_breaking_up:
+                        match_ma = True
 
-                # 通過篩選，加入結果清單
-                core_code = ticker_sym.split(".")[0]
-                name = twstock.codes[core_code].name if core_code in twstock.codes else "未知"
-                results.append({
-                    "股票代號": core_code,
-                    "名稱": name,
-                    "最新價": round(df_daily['Close'].iloc[-1], 2),
-                    "昨日成交量": f"{int(last_vol/1000):,} 張",
-                    "篩選模式": mode
-                })
+                # --- [3] 價值成長 ---
+                pe = pe_data.get(core_code, 999)
+                margin_rate = margin_data.get(core_code, 99)
+                if pe < 22 and margin_rate < 30:
+                    match_fund = True
+
+                # 如果符合任一條件，加入結果
+                if match_kd or match_ma or match_fund:
+                    name = twstock.codes[core_code].name if core_code in twstock.codes else "未知"
+                    match_count = sum([match_kd, match_ma, match_fund])
+                    
+                    results.append({
+                        "股票代號": core_code,
+                        "名稱": name,
+                        "最新價": round(df_daily['Close'].iloc[-1], 2),
+                        "成交量": f"{int(last_vol/1000):,} 張",
+                        "本益比": "N/A" if pe == 999 else round(pe, 1),
+                        "融資率": "N/A" if margin_rate == 99 else f"{margin_rate}%",
+                        "KD": match_kd,
+                        "MA": match_ma,
+                        "FUND": match_fund,
+                        "符合數": match_count
+                    })
             except: continue
             
     if show_progress:
         progress_bar.empty()
         status_text.empty()
+    
     return pd.DataFrame(results)
+
+
+def fetch_all_margin_data():
+    """ 抓取上市/上櫃融資使用率數據 """
+    margins = {}
+    try:
+        # TWSE (上市)
+        url = "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN"
+        res = requests.get(url, verify=False, timeout=10).json()
+        for item in res:
+            code = item.get('股票代號', '').strip()
+            # 融資使用率 = (融資餘額 / 融資限額) * 100
+            # 注意：API 欄位名稱可能變動，這裡用簡單邏輯或佔比
+            try:
+                bal = float(item.get('融資昨日餘額', 0).replace(',', ''))
+                limit = float(item.get('融資限額', 1).replace(',', ''))
+                margins[code] = round((bal / limit) * 100, 2)
+            except: pass
+    except: pass
+    return margins
+
+def fetch_all_pe_data():
+    """ 抓取上市/上櫃本益比數據 """
+    pes = {}
+    try:
+        # TWSE
+        url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+        res = requests.get(url, verify=False, timeout=10).json()
+        for item in res:
+            code = item.get('Code', '').strip()
+            try:
+                pes[code] = float(item.get('PEratio', 999).replace(',', ''))
+            except: pes[code] = 999
+            
+        # TPEx
+        url_tpex = "https://www.tpex.org.tw/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&o=json"
+        res_tpex = requests.get(url_tpex, verify=False, timeout=10).json()
+        if 'tables' in res_tpex:
+            for r in res_tpex['tables'][0].get('data', []):
+                code = r[0].strip()
+                try:
+                    pes[code] = float(r[2])
+                except: pass
+    except: pass
+    return pes
+
 def get_all_taiwan_tickers() -> list[str]:
     import requests
     tickers = []
