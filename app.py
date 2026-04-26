@@ -102,6 +102,8 @@ if st.session_state.get('mode', 'home') == 'screener':
                     code = row['股票代號']
                     if col.button(f"📊 分析 {code}", key=f"analyze_{prefix}_{code}"):
                         st.session_state['active_ticker'] = str(code)
+                        # [修正] 將導航清單更新為「目前分頁」的股票清單，而非全部結果
+                        st.session_state['nav_list'] = df_target['股票代號'].astype(str).tolist()
                         st.session_state['input_key_suffix'] += 1
                         st.session_state['mode'] = 'home'
                         st.session_state['auto_analyze'] = True
