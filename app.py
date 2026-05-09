@@ -78,15 +78,17 @@ if st.session_state.get('mode', 'home') == 'screener':
             kd_res = res_df[res_df['KD'] == True]
             ma_res = res_df[res_df['MA'] == True]
             fund_res = res_df[res_df['FUND'] == True]
+            whale_res = res_df[res_df['WHALE'] == True]
 
             st.success(f"掃描完成！在 {scan_count} 檔中發現了多個潛力標的。")
             
             # 使用分頁顯示
-            t1, t2, t3, t4 = st.tabs([
+            t1, t2, t3, t4, t5 = st.tabs([
                 f"🏆 強勢組合 ({len(dual_match)})", 
                 f"📈 KD轉強 ({len(kd_res)})", 
                 f"🧘 均線糾結 ({len(ma_res)})", 
-                f"💰 價值成長 ({len(fund_res)})"
+                f"💰 價值成長 ({len(fund_res)})",
+                f"🐳 主力吃貨 ({len(whale_res)})"
             ])
             
             def render_analysis_buttons(df_target, prefix):
@@ -97,7 +99,6 @@ if st.session_state.get('mode', 'home') == 'screener':
                 st.markdown(f"### 🎯 點擊按鈕進行個股分析 ({prefix})")
                 cols = st.columns(4)
                 for i, (idx, row) in enumerate(df_target.iterrows()):
-                    if i >= 12: break # 每頁最多顯示 12 個按鈕以免太亂
                     col = cols[i % 4]
                     code = row['股票代號']
                     if col.button(f"📊 分析 {code}", key=f"analyze_{prefix}_{code}"):
@@ -125,6 +126,10 @@ if st.session_state.get('mode', 'home') == 'screener':
                 st.write("💰 **價值成長**：低本益比 + 低融資率，下檔有撐且籌碼乾淨。")
                 st.dataframe(fund_res, width="stretch")
                 render_analysis_buttons(fund_res, "fund")
+            with t5:
+                st.write("🐳 **主力吃貨**：資金量能 (OBV) 創 20 日新高，且短期動能向上，大戶越買越積極。")
+                st.dataframe(whale_res, width="stretch")
+                render_analysis_buttons(whale_res, "whale")
         else:
             st.warning("目前市場上尚未發現符合條件的股票。")
 

@@ -19,7 +19,7 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
     pe_data = fetch_all_pe_data()
 
     total = len(tickers)
-    batch_size = 30
+    batch_size = 100 # 增加批次大小以減少請求次數
     
     progress_bar = st.progress(0.0) if show_progress else None
     status_text = st.empty() if show_progress else None
@@ -31,7 +31,8 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
             status_text.text(f"🔍 全方位大數據掃描中: {i+1} ~ {i+len(batch)} / {total}")
             
         try:
-            data = yf.download(batch, period="1y", interval="1d", group_by='ticker', threads=True, progress=False, timeout=30)
+            # 縮短抓取期間從 1y 到 6mo，因為 MA60 只需約 65 天資料
+            data = yf.download(batch, period="6mo", interval="1d", group_by='ticker', threads=True, progress=False, timeout=30)
         except: continue
         
         if data.empty: continue
@@ -59,6 +60,7 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
                 match_kd = False
                 match_ma = False
                 match_fund = False
+                match_whale = False
 
                 # --- [1] KD 轉強 ---
                 stoch = ta.momentum.StochasticOscillator(high=df_daily['High'], low=df_daily['Low'], close=df_daily['Close'], window=9, smooth_window=3)
@@ -87,10 +89,19 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
                 if pe < 22 and margin_rate < 30:
                     match_fund = True
 
+                # --- [4] 主力吃貨 (OBV 資金量能) ---
+                df_daily['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=df_daily['Close'], volume=df_daily['Volume']).on_balance_volume()
+                df_daily['OBV_MA10'] = df_daily['OBV'].rolling(10).mean()
+                if len(df_daily) >= 20:
+                    obv_recent = df_daily['OBV'].tail(20)
+                    # 條件：OBV 創 20 日新高，且短期資金均線向上，代表主力越買越積極
+                    if df_daily['OBV'].iloc[-1] >= obv_recent.max() and df_daily['OBV_MA10'].iloc[-1] > df_daily['OBV_MA10'].iloc[-5]:
+                        match_whale = True
+
                 # 如果符合任一條件，加入結果
-                if match_kd or match_ma or match_fund:
+                if match_kd or match_ma or match_fund or match_whale:
                     name = twstock.codes[core_code].name if core_code in twstock.codes else "未知"
-                    match_count = sum([match_kd, match_ma, match_fund])
+                    match_count = sum([match_kd, match_ma, match_fund, match_whale])
                     
                     results.append({
                         "股票代號": core_code,
@@ -102,6 +113,7 @@ def screen_stocks(tickers: list[str], show_progress=False) -> pd.DataFrame:
                         "KD": match_kd,
                         "MA": match_ma,
                         "FUND": match_fund,
+                        "WHALE": match_whale,
                         "符合數": match_count
                     })
             except: continue
