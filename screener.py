@@ -185,3 +185,139 @@ def get_all_taiwan_tickers() -> list[str]:
                 if len(r[0]) == 4: tickers.append(f"{r[0]}.TWO")
     except: pass
     return sorted(list(set(tickers))) if tickers else ["2330.TW", "2317.TW"]
+
+
+def get_financial_tickers() -> list[tuple[str, str, str]]:
+    """ 獲取所有金融保險股 (代號, 名稱, yfinance symbol) """
+    import twstock
+    tickers = []
+    for code, info in twstock.codes.items():
+        if getattr(info, 'group', '') == "金融保險業" and len(code) == 4:
+            suffix = ".TW" if info.market == "上市" else ".TWO"
+            tickers.append((code, info.name, f"{code}{suffix}"))
+    return sorted(tickers, key=lambda x: x[0])
+
+
+@st.cache_data(ttl=3600)
+def fetch_gold_stock_data(show_progress=False) -> pd.DataFrame:
+    """
+    抓取金融/證券/壽險股的殖利率、PEG、除息日與是否已除息資訊
+    """
+    import yfinance as yf
+    from datetime import datetime
+    
+    fin_tickers = get_financial_tickers()
+    results = []
+    
+    total = len(fin_tickers)
+    progress_bar = st.progress(0.0) if show_progress else None
+    status_text = st.empty() if show_progress else None
+    
+    # 批次獲取最新股價
+    symbols = [item[2] for item in fin_tickers]
+    try:
+        price_data = yf.download(symbols, period="5d", interval="1d", group_by='ticker', threads=True, progress=False, timeout=20)
+    except:
+        price_data = pd.DataFrame()
+        
+    for idx, (code, name, sym) in enumerate(fin_tickers):
+        if show_progress:
+            progress_bar.progress((idx + 1) / total)
+            status_text.text(f"⏳ 正在抓取金融股數據 ({idx + 1}/{total}): {code} {name}")
+            
+        price = None
+        if not price_data.empty:
+            try:
+                if len(symbols) > 1 and sym in price_data:
+                    ticker_df = price_data[sym].dropna(subset=['Close'])
+                    if not ticker_df.empty:
+                        price = float(ticker_df['Close'].iloc[-1])
+                else:
+                    ticker_df = price_data.dropna(subset=['Close'])
+                    if not ticker_df.empty:
+                        price = float(ticker_df['Close'].iloc[-1])
+            except:
+                price = None
+                
+        peg = "N/A"
+        div_date = "N/A"
+        has_paid = "N/A"
+        cash_div = 0.0
+        stock_div = 0.0
+        cash_yield = 0.0
+        stock_yield = 0.0
+        total_yield = 0.0
+        
+        try:
+            ticker = yf.Ticker(sym)
+            
+            # 1. 抓取 PEG
+            info = ticker.info
+            peg_val = info.get('pegRatio')
+            if isinstance(peg_val, (int, float)):
+                peg = round(peg_val, 2)
+                
+            # 2. 獲取最新配息事件 (從 actions)
+            actions = ticker.actions
+            if actions is not None and not actions.empty:
+                actions_sorted = actions.sort_index(ascending=False)
+                div_events = actions_sorted[(actions_sorted['Dividends'] > 0) | (actions_sorted['Stock Splits'] > 1.0)]
+                if not div_events.empty:
+                    latest_date = div_events.index[0]
+                    div_date = latest_date.strftime('%Y-%m-%d')
+                    
+                    row = div_events.iloc[0]
+                    cash_div = float(row['Dividends'])
+                    
+                    split_ratio = float(row['Stock Splits'])
+                    if split_ratio > 1.0:
+                        stock_div = round((split_ratio - 1.0) * 10, 2)
+                    else:
+                        stock_div = 0.0
+                        
+                    # 以 2026-07-15 基準判斷是否已除息
+                    today_date = datetime(2026, 7, 15).date()
+                    event_date = latest_date.date()
+                    if event_date <= today_date:
+                        has_paid = "已除息"
+                    else:
+                        has_paid = "未除息"
+                        
+            # 備份價格抓取
+            if price is None or pd.isna(price):
+                try:
+                    hist = ticker.history(period="1d")
+                    if not hist.empty:
+                        price = float(hist['Close'].iloc[-1])
+                except:
+                    price = None
+                    
+            # 計算殖利率
+            if price and price > 0:
+                cash_yield = round((cash_div / price) * 100, 2)
+                stock_yield = round((stock_div / 10) * 100, 2)
+                total_yield = round(cash_yield + stock_yield, 2)
+                
+        except Exception as e:
+            print(f"Error fetching {sym}: {e}")
+            
+        results.append({
+            "股票代號": code,
+            "名稱": name,
+            "目前股價": round(price, 2) if price else "N/A",
+            "PEG": peg,
+            "最新除息日": div_date,
+            "是否已除息": has_paid,
+            "現金股利": cash_div,
+            "股票股利": stock_div,
+            "現金殖利率 (%)": cash_yield,
+            "股票殖利率 (%)": stock_yield,
+            "綜合殖利率 (%)": total_yield
+        })
+        
+    if show_progress:
+        progress_bar.empty()
+        status_text.empty()
+        
+    return pd.DataFrame(results)
+

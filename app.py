@@ -3,7 +3,7 @@ import streamlit as st
 
 from data_fetcher import fetch_stock_data, fetch_stock_info, fetch_fundamental_data, resolve_taiwan_stock, fetch_market_summary, fetch_institutional_flow, get_stock_info_from_api
 from analyzer import add_technical_indicators, evaluate_entry_exit
-from screener import screen_stocks, get_all_taiwan_tickers
+from screener import screen_stocks, get_all_taiwan_tickers, fetch_gold_stock_data
 from plotting import render_stock_chart
 
 st.set_page_config(page_title="Stock Analyzer Pro", layout="wide", page_icon="📈")
@@ -42,6 +42,8 @@ st.sidebar.divider()
 st.sidebar.subheader("🌟 獨家進階功能")
 if st.sidebar.button("🔎 我的選股 (快速掃描)"):
     st.session_state['mode'] = 'screener'
+if st.sidebar.button("💰 淘金術選股 (金融/證券/壽險)"):
+    st.session_state['mode'] = 'gold_screener'
 if st.sidebar.button("🏠 回到首頁 (個股分析)"):
     st.session_state['mode'] = 'home'
 
@@ -132,6 +134,70 @@ if st.session_state.get('mode', 'home') == 'screener':
                 render_analysis_buttons(whale_res, "whale")
         else:
             st.warning("目前市場上尚未發現符合條件的股票。")
+
+elif st.session_state.get('mode', 'home') == 'gold_screener':
+    st.header("💰 淘金術選股 (金融/證券/壽險)")
+    st.write("這是一個專為 **台股金融股、證券股、壽險股** 設計的篩選器。自動分析現金殖利率、股票殖利率、兩者綜合的殖利率、PEG、配息日期與配息狀態。")
+    
+    st.info("💡 提醒：首次抓取數據需要 30 秒至 1 分鐘，抓取後將自動緩存 1 小時以供快速瀏覽。")
+    
+    # 篩選控制項 UI
+    col1, col2, col3, col4 = st.columns(4)
+    min_cash_yield = col1.slider("最低現金殖利率 (%)", 0.0, 10.0, 0.0, step=0.5)
+    min_total_yield = col2.slider("最低綜合殖利率 (%)", 0.0, 15.0, 0.0, step=0.5)
+    
+    peg_filter_opt = col3.selectbox(
+        "PEG 篩選 (愈低愈好)", 
+        ["全部", "PEG <= 1.5 (被低估)", "PEG <= 2.0 (合理偏低)", "僅顯示有 PEG 資料者"]
+    )
+    
+    pay_status_opt = col4.selectbox("配息狀態", ["全部", "已除息", "未除息"])
+    
+    if st.button("🚀 開始淘金術數據掃描 (金融/證券/壽險)", use_container_width=True):
+        with st.spinner("正在掃描金融保險業類股的基本面與配息資料..."):
+            res = fetch_gold_stock_data(show_progress=True)
+            st.session_state['gold_scan_res_df'] = res
+            
+    if 'gold_scan_res_df' in st.session_state:
+        df = st.session_state['gold_scan_res_df'].copy()
+        
+        # 進行過濾
+        if min_cash_yield > 0:
+            df = df[df['現金殖利率 (%)'] >= min_cash_yield]
+        if min_total_yield > 0:
+            df = df[df['綜合殖利率 (%)'] >= min_total_yield]
+            
+        if peg_filter_opt == "PEG <= 1.5 (被低估)":
+            df = df[(df['PEG'] != 'N/A') & (df['PEG'] <= 1.5)]
+        elif peg_filter_opt == "PEG <= 2.0 (合理偏低)":
+            df = df[(df['PEG'] != 'N/A') & (df['PEG'] <= 2.0)]
+        elif peg_filter_opt == "僅顯示有 PEG 資料者":
+            df = df[df['PEG'] != 'N/A']
+            
+        if pay_status_opt != "全部":
+            df = df[df['是否已除息'] == pay_status_opt]
+            
+        st.success(f"篩選完成！共找到 {len(df)} 檔符合條件的金融類股。")
+        
+        # 顯示 dataframe
+        st.dataframe(df, use_container_width=True)
+        
+        # 提供跳轉分析個股的按鈕
+        if not df.empty:
+            st.markdown("---")
+            st.markdown("### 🎯 點擊按鈕進行個股分析")
+            cols = st.columns(4)
+            for i, (idx, row) in enumerate(df.iterrows()):
+                col = cols[i % 4]
+                code = row['股票代號']
+                name = row['名稱']
+                if col.button(f"📊 分析 {code} {name}", key=f"analyze_gold_{code}"):
+                    st.session_state['active_ticker'] = str(code)
+                    st.session_state['nav_list'] = df['股票代號'].astype(str).tolist()
+                    st.session_state['input_key_suffix'] += 1
+                    st.session_state['mode'] = 'home'
+                    st.session_state['auto_analyze'] = True
+                    st.rerun()
 
 elif st.session_state.get('mode', 'home') == 'home':
     if st.session_state.get('show_market', False):
